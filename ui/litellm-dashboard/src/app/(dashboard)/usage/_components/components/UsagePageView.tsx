@@ -30,7 +30,7 @@ import EntityUsageExportModal from "@/components/EntityUsageExport";
 import KeyActivityPanel from "@/components/UsagePage/components/KeyActivityPanel";
 import { filterModelActivity } from "@/components/UsagePage/modelActivityFilter";
 import { Team } from "@/components/key_team_helpers/key_list";
-import { gatewayDailyActivityCall, Organization, tagListCall } from "@/components/networking";
+import { gatewayDailyActivityCall, Organization, requestErrorActivityCall, tagListCall } from "@/components/networking";
 import AdvancedDatePicker from "@/components/shared/advanced_date_picker";
 import { Tag } from "@/components/tag_management/types";
 import UserAgentActivity from "@/components/user_agent_activity";
@@ -43,7 +43,6 @@ import {
 } from "@/components/UsagePage/dailyActivityApi";
 import { keyDetailFromResponse, overallUsageMetrics } from "@/components/UsagePage/keyActivityData";
 import {
-  failedRequestBreakdown,
   fetchedRangeKey,
   selectForRange,
   selectGatewayActivity,
@@ -52,6 +51,8 @@ import {
   type FetchedGatewayActivity,
   type GatewayActivity,
 } from "./gatewayActivity";
+import ErrorsTab from "./errors/ErrorsTab";
+import type { RequestErrorActivity } from "./errors/errorsData";
 import EndpointUsage from "./EndpointUsage/EndpointUsage";
 import EntityUsage, { EntityList } from "./EntityUsage/EntityUsage";
 import ModelViewToggle, { ModelViewType } from "./ModelViewToggle";
@@ -230,7 +231,28 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
   }, [isAdmin, gatewayRequest, currentGatewayRangeKey]);
 
   const gatewayActivity = selectGatewayActivity(isAdmin, gatewayActivityData, currentGatewayRangeKey);
-  const gatewayFailedBreakdown = gatewayActivity ? failedRequestBreakdown(gatewayActivity) : null;
+
+  // Failed requests by status and by caller (Errors tab). Same admin-only
+  // source family as the gateway counts, so it shares their fetch shape.
+  const [requestErrorData, setRequestErrorData] = useState<FetchedForRange<RequestErrorActivity> | null>(null);
+  const [requestErrorsFailed, setRequestErrorsFailed] = useState(false);
+  const requestErrorFetchIdRef = useRef(0);
+  useEffect(() => {
+    if (!isAdmin || !gatewayRequest) return;
+    const fetchId = ++requestErrorFetchIdRef.current;
+    setRequestErrorsFailed(false);
+    requestErrorActivityCall(gatewayRequest.accessToken, gatewayRequest.startTime, gatewayRequest.endTime)
+      .then((data) => {
+        if (requestErrorFetchIdRef.current !== fetchId) return;
+        setRequestErrorData({ rangeKey: currentGatewayRangeKey, value: data as RequestErrorActivity });
+      })
+      .catch(() => {
+        if (requestErrorFetchIdRef.current !== fetchId) return;
+        setRequestErrorData(null);
+        setRequestErrorsFailed(true);
+      });
+  }, [isAdmin, gatewayRequest, currentGatewayRangeKey]);
+  const requestErrorActivity = isAdmin ? selectForRange(requestErrorData, currentGatewayRangeKey) : null;
 
   const userSpendData = useMemo(
     () => ({
@@ -366,6 +388,11 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                     <TabsTrigger value="endpoints" className="flex-none px-3">
                       Endpoint Activity
                     </TabsTrigger>
+                    {isAdmin && (
+                      <TabsTrigger value="errors" className="flex-none px-3">
+                        Errors
+                      </TabsTrigger>
+                    )}
                   </TabsList>
                   <div className="flex items-center gap-2">
                     <Button variant="outline" size="sm" onClick={() => setIsAiChatOpen(true)}>
@@ -382,7 +409,6 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                   <UsageOverview
                     results={sortedDailyResults}
                     totals={totals}
-                    failureBreakdown={gatewayFailedBreakdown}
                     loading={loading}
                     requestCountsPending={requestCountsPending}
                     budget={currentUser?.max_budget ?? null}
@@ -490,6 +516,15 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                 <TabsContent value="endpoints" keepMounted>
                   <EndpointUsage userSpendData={userSpendData} />
                 </TabsContent>
+                {isAdmin && (
+                  <TabsContent value="errors">
+                    <ErrorsTab
+                      activity={requestErrorActivity}
+                      loading={requestErrorActivity === null && !requestErrorsFailed}
+                      failed={requestErrorsFailed}
+                    />
+                  </TabsContent>
+                )}
               </Tabs>
             </>
           )}
